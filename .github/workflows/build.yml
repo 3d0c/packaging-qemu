@@ -117,14 +117,7 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    container:
-      image: quay.io/centos/centos:stream9
     steps:
-      - name: Install prerequisites
-        run: |
-          dnf install -y epel-release
-          dnf install -y mock
-
       - name: Download SRPM
         uses: actions/download-artifact@v4
         with:
@@ -133,13 +126,22 @@ jobs:
 
       - name: Build RPMs with mock
         run: |
+          mkdir -p rpms
           SRPM=$(find srpms -name '*.src.rpm' | head -1)
           echo "Building from: ${SRPM}"
           echo "Target: centos-stream-9-${{ matrix.arch }}"
-          mock -r centos-stream-9-${{ matrix.arch }} \
-            --isolation=simple \
-            --rebuild "$SRPM" \
-            --resultdir=./rpms
+          docker run --privileged \
+            -v "$PWD/srpms:/srpms:ro" \
+            -v "$PWD/rpms:/rpms" \
+            quay.io/centos/centos:stream9 \
+            bash -c '
+              dnf install -y epel-release &&
+              dnf install -y mock &&
+              mock -r centos-stream-9-${{ matrix.arch }} \
+                --isolation=simple \
+                --rebuild /srpms/*.src.rpm \
+                --resultdir=/rpms
+            '
 
       - name: Upload RPMs
         uses: actions/upload-artifact@v4
