@@ -1,0 +1,189 @@
+name: Build QEMU RPM Packages
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - nvidia_stable-10.1
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: https://github.com/NVIDIA/QEMU.git
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  # Job 1 — Build SRPM
+  # ────────────────────────────────────────────────────────────────────────
+  build-srpm:
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/centos/centos:stream9
+    outputs:
+      commit_sha: ${{ steps.parse.outputs.commit_sha }}
+    steps:
+      - name: Install prerequisites
+        run: dnf install -y git rpm-build rpmdevtools xz findutils
+
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Parse build request
+        id: parse
+        shell: bash
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          COMMIT_MSG=$(git log -1 --format='%s')
+
+          for MSG in "$PR_TITLE" "$COMMIT_MSG"; do
+            if [[ "$MSG" =~ build:[[:space:]]*([a-f0-9]+) ]]; then
+              SHA="${BASH_REMATCH[1]}"
+              echo "commit_sha=${SHA}" >> "$GITHUB_OUTPUT"
+              echo "Build request for upstream commit: ${SHA}"
+              exit 0
+            fi
+          done
+
+          echo "::notice::No 'build: <sha>' pattern found — skipping."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create source tarball
+        if: steps.parse.outputs.skip != 'true'
+        run: |
+          chmod +x scripts/create-tarball.sh
+          scripts/create-tarball.sh "${{ steps.parse.outputs.commit_sha }}"
+
+      - name: Update spec file
+        if: steps.parse.outputs.skip != 'true'
+        run: |
+          chmod +x scripts/update-spec.sh
+          scripts/update-spec.sh "${{ steps.parse.outputs.commit_sha }}"
+
+      - name: Build SRPM
+        if: steps.parse.outputs.skip != 'true'
+        run: |
+          rpmdev-setuptree
+          cp SOURCES/* ~/rpmbuild/SOURCES/
+          cp SPECS/qemu-kvm.spec ~/rpmbuild/SPECS/
+          rpmbuild -bs ~/rpmbuild/SPECS/qemu-kvm.spec \
+            --define "_topdir $HOME/rpmbuild"
+
+      - name: Collect SRPM
+        if: steps.parse.outputs.skip != 'true'
+        run: |
+          mkdir -p srpm-output
+          cp ~/rpmbuild/SRPMS/*.src.rpm srpm-output/
+
+      - name: Upload SRPM
+        id: upload-srpm
+        if: steps.parse.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: srpm
+          path: srpm-output/*.src.rpm
+
+      - name: "Commit: srpm ready"
+        if: steps.parse.outputs.skip != 'true'
+        run: |
+          SRPM_FILES=$(ls -1 srpm-output/*.src.rpm | xargs -n1 basename)
+          ARTIFACT_URL="${{ steps.upload-srpm.outputs.artifact-url }}"
+
+          MSG=$(printf "srpm ready\n\nArtifacts:\n%s\n%s" "$SRPM_FILES" "$ARTIFACT_URL")
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add SPECS/qemu-kvm.spec
+          git commit -m "$MSG"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Job 2 — Build RPMs (from SRPM via mock), one per architecture
+  # ────────────────────────────────────────────────────────────────────────
+  build-rpms:
+    needs: build-srpm
+    if: needs.build-srpm.outputs.commit_sha != ''
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: quay.io/centos/centos:stream9
+    steps:
+      - name: Install prerequisites
+        run: |
+          dnf install -y epel-release
+          dnf install -y mock
+
+      - name: Download SRPM
+        uses: actions/download-artifact@v4
+        with:
+          name: srpm
+          path: ./srpms
+
+      - name: Build RPMs with mock
+        run: |
+          SRPM=$(find srpms -name '*.src.rpm' | head -1)
+          echo "Building from: ${SRPM}"
+          echo "Target: centos-stream-9-${{ matrix.arch }}"
+          mock -r centos-stream-9-${{ matrix.arch }} \
+            --isolation=simple \
+            --rebuild "$SRPM" \
+            --resultdir=./rpms
+
+      - name: Upload RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpms-${{ matrix.arch }}
+          path: |
+            ./rpms/*.rpm
+            !./rpms/*.src.rpm
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Job 3 — Finalize (runs after ALL arch builds succeed)
+  # ────────────────────────────────────────────────────────────────────────
+  finalize:
+    needs: [build-srpm, build-rpms]
+    if: needs.build-srpm.outputs.commit_sha != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Collect artifact URLs
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          RUN_ID="${{ github.run_id }}"
+
+          ARTIFACT_LIST=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '.artifacts[] | "- \(.name): https://github.com/'"${REPO}"'/actions/runs/'"${RUN_ID}"'/artifacts/\(.id)"')
+
+          echo "list<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$ARTIFACT_LIST" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: "Commit: rpms ready"
+        run: |
+          ARTIFACTS="${{ steps.artifacts.outputs.list }}"
+          MSG=$(printf "rpms ready\n\nArtifacts:\n%s" "$ARTIFACTS")
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "$MSG"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
