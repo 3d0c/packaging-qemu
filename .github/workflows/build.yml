@@ -110,6 +110,7 @@ jobs:
     needs: build-srpm
     if: needs.build-srpm.outputs.commit_sha != ''
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x86_64
@@ -137,10 +138,11 @@ jobs:
             bash -c '
               dnf install -y epel-release &&
               dnf install -y mock &&
-              mock -r centos-stream-9-${{ matrix.arch }} \
+              usermod -a -G mock root &&
+              sg mock -c "mock -r centos-stream-9-${{ matrix.arch }} \
                 --isolation=simple \
                 --rebuild /srpms/*.src.rpm \
-                --resultdir=/rpms
+                --resultdir=/rpms"
             '
 
       - name: Upload RPMs
