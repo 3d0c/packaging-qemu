@@ -135,12 +135,14 @@ jobs:
           name: srpm
           path: ./srpms
 
-      - name: Install build dependencies
-        run: dnf builddep -y srpms/*.src.rpm
+      - name: Install SRPM and build dependencies
+        run: |
+          rpm -i srpms/*.src.rpm
+          dnf builddep -y ~/rpmbuild/SPECS/qemu-kvm.spec
 
       - name: Build RPMs
         run: |
-          rpmbuild --rebuild srpms/*.src.rpm \
+          rpmbuild -bb ~/rpmbuild/SPECS/qemu-kvm.spec \
             --define "_rpmdir $PWD/rpms"
 
       - name: Upload build logs on failure
