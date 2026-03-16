@@ -123,8 +123,11 @@ jobs:
     container:
       image: quay.io/centos/centos:stream9
     steps:
-      - name: Install prerequisites
-        run: dnf install -y rpm-build dnf-plugins-core
+      - name: Enable repos and install prerequisites
+        run: |
+          dnf install -y dnf-plugins-core epel-release
+          dnf config-manager --set-enabled crb
+          dnf install -y rpm-build
 
       - name: Download SRPM
         uses: actions/download-artifact@v4
