@@ -4,7 +4,7 @@
 %global meson_version 0.61.3
 %global usbredir_version 0.7.1
 %global ipxe_version 20200823-5.git4bd064de
-%global commit unknown
+%global commit a76b93dd1284c0907179bee0c7815a5858fa5876
 
 # LTO does not work with the coroutines of QEMU on non-x86 architectures
 # (see BZ 1952483 and 1950192 for more information)
@@ -150,7 +150,7 @@ Obsoletes: %{name}-block-ssh <= %{epoch}:%{version}                    \
 Summary: QEMU is a machine emulator and virtualizer
 Name: qemu-kvm
 Version: 10.1.0
-Release: 10%{?rcrel}%{?dist}%{?cc_suffix}
+Release: 17%{?rcrel}%{?dist}%{?cc_suffix}
 # Epoch because we pushed a qemu-1.0 package. AIUI this can't ever be dropped
 # Epoch 15 used for RHEL 8
 # Epoch 17 used for RHEL 9 (due to release versioning offset in RHEL 8.5)

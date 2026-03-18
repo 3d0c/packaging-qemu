@@ -24,7 +24,9 @@ jobs:
       commit_sha: ${{ steps.parse.outputs.commit_sha }}
     steps:
       - name: Install prerequisites
-        run: dnf install -y git rpm-build rpmdevtools xz findutils
+        run: |
+          dnf install -y git rpm-build rpmdevtools xz findutils python3-pip
+          pip3 install meson
 
       - name: Checkout packaging repo
         uses: actions/checkout@v4
@@ -104,12 +106,13 @@ jobs:
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
 
   # ────────────────────────────────────────────────────────────────────────
-  # Job 2 — Build RPMs (from SRPM via mock), one per architecture
+  # Job 2 — Build RPMs (rpmbuild --rebuild in CentOS Stream 9 container)
   # ────────────────────────────────────────────────────────────────────────
   build-rpms:
     needs: build-srpm
     if: needs.build-srpm.outputs.commit_sha != ''
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x86_64
@@ -120,10 +123,11 @@ jobs:
     container:
       image: quay.io/centos/centos:stream9
     steps:
-      - name: Install prerequisites
+      - name: Enable repos and install prerequisites
         run: |
-          dnf install -y epel-release
-          dnf install -y mock
+          dnf install -y dnf-plugins-core epel-release
+          dnf config-manager --set-enabled crb
+          dnf install -y rpm-build
 
       - name: Download SRPM
         uses: actions/download-artifact@v4
@@ -131,23 +135,29 @@ jobs:
           name: srpm
           path: ./srpms
 
-      - name: Build RPMs with mock
+      - name: Install SRPM and build dependencies
         run: |
-          SRPM=$(find srpms -name '*.src.rpm' | head -1)
-          echo "Building from: ${SRPM}"
-          echo "Target: centos-stream-9-${{ matrix.arch }}"
-          mock -r centos-stream-9-${{ matrix.arch }} \
-            --isolation=simple \
-            --rebuild "$SRPM" \
-            --resultdir=./rpms
+          rpm -i srpms/*.src.rpm
+          dnf builddep -y ~/rpmbuild/SPECS/qemu-kvm.spec
+
+      - name: Build RPMs
+        run: |
+          rpmbuild -bb ~/rpmbuild/SPECS/qemu-kvm.spec \
+            --define "_rpmdir $PWD/rpms"
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.arch }}
+          path: ~/rpmbuild/BUILD/qemu-*/qemu_kvm_build/meson-logs/
 
       - name: Upload RPMs
         uses: actions/upload-artifact@v4
         with:
           name: rpms-${{ matrix.arch }}
           path: |
-            ./rpms/*.rpm
-            !./rpms/*.src.rpm
+            ./rpms/**/*.rpm
 
   # ────────────────────────────────────────────────────────────────────────
   # Job 3 — Finalize (runs after ALL arch builds succeed)
