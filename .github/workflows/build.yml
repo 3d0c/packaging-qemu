@@ -17,6 +17,7 @@ jobs:
   # Job 1 — Build SRPM
   # ────────────────────────────────────────────────────────────────────────
   build-srpm:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     container:
       image: quay.io/centos/centos:stream9
@@ -26,7 +27,7 @@ jobs:
       - name: Install prerequisites
         run: |
           dnf install -y git rpm-build rpmdevtools xz findutils python3-pip
-          pip3 install meson
+          pip3 install meson pulp-cli
 
       - name: Checkout packaging repo
         uses: actions/checkout@v4
@@ -86,10 +87,36 @@ jobs:
       - name: Upload SRPM
         id: upload-srpm
         if: steps.parse.outputs.skip != 'true'
+        # Keep SRPM as a workflow artifact for intra-run handoff to matrix RPM builds.
+        # We also upload SRPM to Pulp below, but that upload is done with --no-publish.
+        # Until publish runs, matrix jobs cannot reliably consume SRPM via Pulp repos.
         uses: actions/upload-artifact@v4
         with:
           name: srpm
           path: srpm-output/*.src.rpm
+
+      - name: Configure pulp-cli
+        if: steps.parse.outputs.skip != 'true'
+        env:
+          PULP_USERNAME: ${{ vars.PULP_USERNAME }}
+          PULP_PASSWORD: ${{ secrets.PULP_PASSWORD }}
+          PULP_BASE_URL: ${{ vars.PULP_BASE_URL }}
+        run: |
+          source scripts/pulp-common.sh
+          configure_pulp_cli
+
+      - name: Upload SRPM to Pulp
+        if: steps.parse.outputs.skip != 'true'
+        env:
+          PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
+          PULP_SRPM_REPOSITORY: ${{ vars.PULP_SRPM_REPOSITORY }}
+        run: |
+          # Store SRPM content early in Pulp, but defer repository publication to final job.
+          # This keeps publication atomic after both architecture builds complete.
+          source scripts/pulp-common.sh
+          : "${PULP_RPM_REPOSITORY:?PULP_RPM_REPOSITORY variable is required}"
+          TARGET_SRPM_REPOSITORY="${PULP_SRPM_REPOSITORY:-$PULP_RPM_REPOSITORY}"
+          upload_packages "./srpm-output" "*.src.rpm" "${TARGET_SRPM_REPOSITORY}" "SRPM"
 
       - name: "Commit: srpm ready"
         if: steps.parse.outputs.skip != 'true'
@@ -127,9 +154,17 @@ jobs:
         run: |
           dnf install -y dnf-plugins-core epel-release
           dnf config-manager --set-enabled crb
-          dnf install -y rpm-build
+          dnf install -y git rpm-build python3-pip
+          python3 -m pip install pulp-cli
+
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Download SRPM
+        # Consume SRPM artifact as a reliable, immediate handoff from build-srpm.
+        # Pulp upload in build-srpm is intentionally unpublished until final publish.
         uses: actions/download-artifact@v4
         with:
           name: srpm
@@ -145,6 +180,24 @@ jobs:
           rpmbuild -bb ~/rpmbuild/SPECS/qemu-kvm.spec \
             --define "_rpmdir $PWD/rpms"
 
+      - name: Configure pulp-cli
+        env:
+          PULP_USERNAME: ${{ vars.PULP_USERNAME }}
+          PULP_PASSWORD: ${{ secrets.PULP_PASSWORD }}
+          PULP_BASE_URL: ${{ vars.PULP_BASE_URL }}
+        run: |
+          source scripts/pulp-common.sh
+          configure_pulp_cli
+
+      - name: Upload RPMs to Pulp
+        env:
+          PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          source scripts/pulp-common.sh
+          : "${PULP_RPM_REPOSITORY:?PULP_RPM_REPOSITORY variable is required}"
+          upload_packages "./rpms" "*.rpm" "${PULP_RPM_REPOSITORY}" "RPM (${TARGET_ARCH})" "${TARGET_ARCH}" "true"
+
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -152,17 +205,10 @@ jobs:
           name: build-logs-${{ matrix.arch }}
           path: ~/rpmbuild/BUILD/qemu-*/qemu_kvm_build/meson-logs/
 
-      - name: Upload RPMs
-        uses: actions/upload-artifact@v4
-        with:
-          name: rpms-${{ matrix.arch }}
-          path: |
-            ./rpms/**/*.rpm
-
   # ────────────────────────────────────────────────────────────────────────
-  # Job 3 — Finalize (runs after ALL arch builds succeed)
+  # Job 3 — Publish repositories (runs after ALL arch builds succeed)
   # ────────────────────────────────────────────────────────────────────────
-  finalize:
+  publish:
     needs: [build-srpm, build-rpms]
     if: needs.build-srpm.outputs.commit_sha != ''
     runs-on: ubuntu-latest
@@ -173,27 +219,34 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - name: Collect artifact URLs
-        id: artifacts
+      - name: Install pulp-cli
+        run: python3 -m pip install pulp-cli
+
+      - name: Configure pulp-cli
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULP_USERNAME: ${{ vars.PULP_USERNAME }}
+          PULP_PASSWORD: ${{ secrets.PULP_PASSWORD }}
+          PULP_BASE_URL: ${{ vars.PULP_BASE_URL }}
         run: |
-          REPO="${{ github.repository }}"
-          RUN_ID="${{ github.run_id }}"
+          source scripts/pulp-common.sh
+          configure_pulp_cli
 
-          ARTIFACT_LIST=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" \
-            --jq '.artifacts[] | "- \(.name): https://github.com/'"${REPO}"'/actions/runs/'"${RUN_ID}"'/artifacts/\(.id)"')
+      - name: Publish repositories
+        env:
+          PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
+          PULP_SRPM_REPOSITORY: ${{ vars.PULP_SRPM_REPOSITORY }}
+        run: |
+          source scripts/pulp-common.sh
+          : "${PULP_RPM_REPOSITORY:?PULP_RPM_REPOSITORY variable is required}"
+          publish_repository "${PULP_RPM_REPOSITORY}"
 
-          echo "list<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$ARTIFACT_LIST" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          if [ -n "${PULP_SRPM_REPOSITORY}" ] && [ "${PULP_SRPM_REPOSITORY}" != "${PULP_RPM_REPOSITORY}" ]; then
+            publish_repository "${PULP_SRPM_REPOSITORY}"
+          fi
 
       - name: "Commit: rpms ready"
         run: |
-          ARTIFACTS="${{ steps.artifacts.outputs.list }}"
-          MSG=$(printf "rpms ready\n\nArtifacts:\n%s" "$ARTIFACTS")
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit --allow-empty -m "$MSG"
+          git commit --allow-empty -m "rpms ready"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
