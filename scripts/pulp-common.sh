@@ -8,7 +8,6 @@ configure_pulp_cli() {
   : "${PULP_BASE_URL:?PULP_BASE_URL variable is required}"
 
   pulp config create \
-    --name ci \
     --base-url "${PULP_BASE_URL}" \
     --username "${PULP_USERNAME}" \
     --password "${PULP_PASSWORD}"
