@@ -11,6 +11,7 @@ permissions:
 
 env:
   UPSTREAM_REPO: https://github.com/NVIDIA/QEMU.git
+  PULP_DEBUG: "1"
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────

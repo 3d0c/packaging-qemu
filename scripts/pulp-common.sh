@@ -2,15 +2,32 @@
 
 set -euo pipefail
 
+if [ "${PULP_DEBUG:-0}" = "1" ]; then
+  set -x
+fi
+
 configure_pulp_cli() {
   : "${PULP_USERNAME:?PULP_USERNAME variable is required}"
   : "${PULP_PASSWORD:?PULP_PASSWORD secret is required}"
   : "${PULP_BASE_URL:?PULP_BASE_URL variable is required}"
 
+  # Avoid printing credentials when xtrace is enabled.
+  local had_xtrace=0
+  case "$-" in
+    *x*)
+      had_xtrace=1
+      set +x
+      ;;
+  esac
+
   pulp config create \
     --base-url "${PULP_BASE_URL}" \
     --username "${PULP_USERNAME}" \
     --password "${PULP_PASSWORD}"
+
+  if [ "${had_xtrace}" -eq 1 ]; then
+    set -x
+  fi
 }
 
 pulp_upload_package() {
@@ -19,7 +36,9 @@ pulp_upload_package() {
 
   # Some pulp-cli versions require content type selection (-t package),
   # while others expose upload directly under `content upload`.
+  echo "DEBUG: probing command support: pulp rpm content -t package upload --help"
   if pulp rpm content -t package upload --help >/dev/null 2>&1; then
+    echo "DEBUG: running: pulp rpm content -t package upload --file \"${package_file}\" --repository \"${repository}\" --no-publish"
     pulp rpm content -t package upload \
       --file "${package_file}" \
       --repository "${repository}" \
@@ -27,6 +46,8 @@ pulp_upload_package() {
     return 0
   fi
 
+  echo "DEBUG: fallback command selected"
+  echo "DEBUG: running: pulp rpm content upload --file \"${package_file}\" --repository \"${repository}\" --no-publish"
   pulp rpm content upload \
     --file "${package_file}" \
     --repository "${repository}" \
