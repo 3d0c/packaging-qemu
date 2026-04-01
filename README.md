@@ -37,10 +37,10 @@ Before running the workflow, configure these settings in GitHub repository setti
 - `vars.PULP_BASE_URL`
 - `vars.PULP_USERNAME`
 - `secrets.PULP_PASSWORD`
-- `vars.PULP_RPM_REPOSITORY` (target repository name in Pulp for binary RPMs)
-- `vars.PULP_SRPM_REPOSITORY` (optional; if unset, SRPMs are uploaded to `PULP_RPM_REPOSITORY`)
+- `vars.PULP_RPM_REPOSITORY` (repository prefix for binary RPMs; CI uploads/publishes to `<prefix>-x86_64` and `<prefix>-aarch64`)
+- `vars.PULP_SRPM_REPOSITORY` (optional; if unset, SRPMs are uploaded/published to `<prefix>-SRPMS`)
 
-After the pipeline finishes, SRPMs and RPMs are uploaded and published in the configured Pulp repository/repositories.
+After the pipeline finishes, SRPMs and RPMs are uploaded and published in the derived Pulp repository/repositories.
 
 ## Repository structure
 

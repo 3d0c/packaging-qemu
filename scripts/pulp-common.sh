@@ -6,13 +6,18 @@ if [ "${PULP_DEBUG:-0}" = "1" ]; then
   set -x
 fi
 
-configure_pulp_cli() {
+require_pulp_credentials() {
   : "${PULP_USERNAME:?PULP_USERNAME variable is required}"
   : "${PULP_PASSWORD:?PULP_PASSWORD secret is required}"
   : "${PULP_BASE_URL:?PULP_BASE_URL variable is required}"
+}
+
+run_pulp() {
+  require_pulp_credentials
 
   # Avoid printing credentials when xtrace is enabled.
   local had_xtrace=0
+  local rc=0
   case "$-" in
     *x*)
       had_xtrace=1
@@ -20,14 +25,21 @@ configure_pulp_cli() {
       ;;
   esac
 
-  pulp config create \
+  if pulp \
     --base-url "${PULP_BASE_URL}" \
     --username "${PULP_USERNAME}" \
-    --password "${PULP_PASSWORD}"
+    --password "${PULP_PASSWORD}" \
+    "$@"; then
+    rc=0
+  else
+    rc=$?
+  fi
 
   if [ "${had_xtrace}" -eq 1 ]; then
     set -x
   fi
+
+  return "${rc}"
 }
 
 pulp_upload_package() {
@@ -37,9 +49,9 @@ pulp_upload_package() {
   # Some pulp-cli versions require content type selection (-t package),
   # while others expose upload directly under `content upload`.
   echo "DEBUG: probing command support: pulp rpm content -t package upload --help"
-  if pulp rpm content -t package upload --help >/dev/null 2>&1; then
+  if run_pulp rpm content -t package upload --help >/dev/null 2>&1; then
     echo "DEBUG: running: pulp rpm content -t package upload --file \"${package_file}\" --repository \"${repository}\" --no-publish"
-    pulp rpm content -t package upload \
+    run_pulp rpm content -t package upload \
       --file "${package_file}" \
       --repository "${repository}" \
       --no-publish
@@ -48,7 +60,7 @@ pulp_upload_package() {
 
   echo "DEBUG: fallback command selected"
   echo "DEBUG: running: pulp rpm content upload --file \"${package_file}\" --repository \"${repository}\" --no-publish"
-  pulp rpm content upload \
+  run_pulp rpm content upload \
     --file "${package_file}" \
     --repository "${repository}" \
     --no-publish
@@ -93,5 +105,5 @@ publish_repository() {
   local repository="${1}"
   echo "Publishing repository: ${repository}"
 
-  pulp rpm publication create --repository "${repository}"
+  run_pulp rpm publication create --repository "${repository}"
 }
