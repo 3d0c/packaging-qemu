@@ -25,14 +25,39 @@ run_pulp() {
       ;;
   esac
 
-  if pulp \
-    --base-url "${PULP_BASE_URL}" \
-    --username "${PULP_USERNAME}" \
-    --password "${PULP_PASSWORD}" \
-    "$@"; then
-    rc=0
+  if [ "${PULP_DEBUG:-0}" = "1" ]; then
+    # Verbose API tracing; full stdout/stderr captured for a single labeled dump on failure.
+    local -a cmd=(
+      pulp -vv
+      --base-url "${PULP_BASE_URL}"
+      --username "${PULP_USERNAME}"
+      --password "${PULP_PASSWORD}"
+    )
+    echo "DEBUG run_pulp: PULP_BASE_URL=${PULP_BASE_URL} PULP_USERNAME=${PULP_USERNAME}"
+    echo "DEBUG run_pulp: $(pulp --version 2>&1)"
+    echo "DEBUG run_pulp: subcommand: $(printf '%q ' "$@")"
+
+    local log
+    log=$(mktemp)
+
+    "${cmd[@]}" "$@" 2>&1 | tee "${log}"
+    rc=${PIPESTATUS[0]}
+
+    if [ "${rc}" -ne 0 ]; then
+      echo "DEBUG run_pulp: pulp exited with ${rc}; complete captured output:"
+      cat "${log}"
+    fi
+    rm -f "${log}"
   else
-    rc=$?
+    if pulp \
+      --base-url "${PULP_BASE_URL}" \
+      --username "${PULP_USERNAME}" \
+      --password "${PULP_PASSWORD}" \
+      "$@"; then
+      rc=0
+    else
+      rc=$?
+    fi
   fi
 
   if [ "${had_xtrace}" -eq 1 ]; then
