@@ -14,57 +14,12 @@ require_pulp_credentials() {
 
 run_pulp() {
   require_pulp_credentials
-
-  # Avoid printing credentials when xtrace is enabled.
-  local had_xtrace=0
-  local rc=0
-  case "$-" in
-    *x*)
-      had_xtrace=1
-      set +x
-      ;;
-  esac
-
-  if [ "${PULP_DEBUG:-0}" = "1" ]; then
-    # Verbose API tracing; full stdout/stderr captured for a single labeled dump on failure.
-    local -a cmd=(
-      pulp -vv
-      --base-url "${PULP_BASE_URL}"
-      --username "${PULP_USERNAME}"
-      --password "${PULP_PASSWORD}"
-    )
-    echo "DEBUG run_pulp: PULP_BASE_URL=${PULP_BASE_URL} PULP_USERNAME=${PULP_USERNAME}"
-    echo "DEBUG run_pulp: $(pulp --version 2>&1)"
-    echo "DEBUG run_pulp: subcommand: $(printf '%q ' "$@")"
-
-    local log
-    log=$(mktemp)
-
-    "${cmd[@]}" "$@" 2>&1 | tee "${log}"
-    rc=${PIPESTATUS[0]}
-
-    if [ "${rc}" -ne 0 ]; then
-      echo "DEBUG run_pulp: pulp exited with ${rc}; complete captured output:"
-      cat "${log}"
-    fi
-    rm -f "${log}"
-  else
-    if pulp \
-      --base-url "${PULP_BASE_URL}" \
-      --username "${PULP_USERNAME}" \
-      --password "${PULP_PASSWORD}" \
-      "$@"; then
-      rc=0
-    else
-      rc=$?
-    fi
-  fi
-
-  if [ "${had_xtrace}" -eq 1 ]; then
-    set -x
-  fi
-
-  return "${rc}"
+  echo "DEBUG: \"${PULP_USERNAME}\" \"${PULP_PASSWORD}\" \"${PULP_BASE_URL}\""
+  pulp \
+    --username "${PULP_USERNAME}" \
+    --password "${PULP_PASSWORD}" \
+    --base-url "${PULP_BASE_URL}" \
+    "$@"
 }
 
 pulp_upload_package() {
