@@ -102,7 +102,7 @@ jobs:
           PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
           PULP_SRPM_REPOSITORY: ${{ vars.PULP_SRPM_REPOSITORY }}
           PULP_USERNAME: ${{ vars.PULP_USERNAME }}
-          PULP_PASSWORD: ${{ vars.PULP_PASSWORD }}
+          PULP_PASSWORD: ${{ secrets.PULP_PASSWORD }}
           PULP_BASE_URL: ${{ vars.PULP_BASE_URL }}
         run: |
           # Store SRPM content early in Pulp, but defer repository publication to final job.
