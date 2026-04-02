@@ -2,44 +2,49 @@
 
 set -euo pipefail
 
-json_get_field() {
-  local field="${1}"
-  python3 -c 'import json,sys; f=sys.argv[1]; print(json.load(sys.stdin).get(f, ""))' "${field}"
-}
+if [ "${PULP_DEBUG:-0}" = "1" ]; then
+  set -x
+fi
 
-get_task_state() {
-  local task_id="${1}"
-  pulp task show --task "${task_id}" --output json | json_get_field state
-}
-
-configure_pulp_cli() {
+require_pulp_credentials() {
   : "${PULP_USERNAME:?PULP_USERNAME variable is required}"
   : "${PULP_PASSWORD:?PULP_PASSWORD secret is required}"
   : "${PULP_BASE_URL:?PULP_BASE_URL variable is required}"
-
-  pulp config create \
-    --base-url "${PULP_BASE_URL}" \
-    --username "${PULP_USERNAME}" \
-    --password "${PULP_PASSWORD}"
 }
 
-wait_for_task_completion() {
-  local task_id="${1}"
-  local subject="${2}"
+run_pulp() {
+  require_pulp_credentials
+  echo "DEBUG: \"${PULP_USERNAME}\" \"${PULP_PASSWORD}\" \"${PULP_BASE_URL}\""
+  pulp \
+    --username "${PULP_USERNAME}" \
+    --password "${PULP_PASSWORD}" \
+    --base-url "${PULP_BASE_URL}" \
+    "$@"
+}
 
-  if [ -z "${task_id}" ]; then
-    echo "Failed to parse task id for ${subject}"
-    exit 1
+pulp_upload_package() {
+  local package_file="${1}"
+  local repository="${2}"
+
+  # Some pulp-cli versions require content type selection (-t package),
+  # while others expose upload directly under `content upload`.
+  pulp --version
+  echo "DEBUG: probing command support: pulp rpm content -t package upload --help"
+  if run_pulp rpm content -t package upload --help >/dev/null 2>&1; then
+    echo "DEBUG: running: pulp rpm content -t package upload --file \"${package_file}\" --repository \"${repository}\" --no-publish"
+    run_pulp rpm content -t package upload \
+      --file "${package_file}" \
+      --repository "${repository}" \
+      --no-publish
+    return 0
   fi
 
-  pulp task wait --task "${task_id}"
-  local status
-  status="$(get_task_state "${task_id}")"
-
-  if [ "${status}" != "completed" ]; then
-    echo "Task failed for ${subject} (task: ${task_id}, status: ${status})"
-    exit 1
-  fi
+  echo "DEBUG: fallback command selected"
+  echo "DEBUG: running: pulp rpm content upload --file \"${package_file}\" --repository \"${repository}\" --no-publish"
+  run_pulp rpm content upload \
+    --file "${package_file}" \
+    --repository "${repository}" \
+    --no-publish
 }
 
 upload_packages() {
@@ -67,16 +72,7 @@ upload_packages() {
     fi
 
     echo "Uploading ${label}: ${package_file}"
-    local task
-    task="$(
-      pulp rpm content -t package upload \
-        --file "${package_file}" \
-        --repository "${repository}" \
-        --no-publish \
-        --output json | json_get_field task
-    )"
-
-    wait_for_task_completion "${task}" "${package_file}"
+    pulp_upload_package "${package_file}" "${repository}"
     upload_count=$((upload_count + 1))
   done
 
@@ -90,12 +86,5 @@ publish_repository() {
   local repository="${1}"
   echo "Publishing repository: ${repository}"
 
-  local task
-  task="$(
-    pulp rpm publication create \
-      --repository "${repository}" \
-      --output json | json_get_field task
-  )"
-
-  wait_for_task_completion "${task}" "publication ${repository}"
+  run_pulp rpm publication create --repository "${repository}"
 }

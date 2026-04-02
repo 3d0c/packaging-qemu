@@ -11,6 +11,7 @@ permissions:
 
 env:
   UPSTREAM_REPO: https://github.com/NVIDIA/QEMU.git
+  PULP_DEBUG: "1"
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────
@@ -95,27 +96,20 @@ jobs:
           name: srpm
           path: srpm-output/*.src.rpm
 
-      - name: Configure pulp-cli
-        if: steps.parse.outputs.skip != 'true'
-        env:
-          PULP_USERNAME: ${{ vars.PULP_USERNAME }}
-          PULP_PASSWORD: ${{ secrets.PULP_PASSWORD }}
-          PULP_BASE_URL: ${{ vars.PULP_BASE_URL }}
-        run: |
-          source scripts/pulp-common.sh
-          configure_pulp_cli
-
       - name: Upload SRPM to Pulp
         if: steps.parse.outputs.skip != 'true'
         env:
           PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
           PULP_SRPM_REPOSITORY: ${{ vars.PULP_SRPM_REPOSITORY }}
+          PULP_USERNAME: ${{ vars.PULP_USERNAME }}
+          PULP_PASSWORD: ${{ secrets.PULP_PASSWORD }}
+          PULP_BASE_URL: ${{ vars.PULP_BASE_URL }}
         run: |
           # Store SRPM content early in Pulp, but defer repository publication to final job.
           # This keeps publication atomic after both architecture builds complete.
           source scripts/pulp-common.sh
           : "${PULP_RPM_REPOSITORY:?PULP_RPM_REPOSITORY variable is required}"
-          TARGET_SRPM_REPOSITORY="${PULP_SRPM_REPOSITORY:-$PULP_RPM_REPOSITORY}"
+          TARGET_SRPM_REPOSITORY="${PULP_SRPM_REPOSITORY:-${PULP_RPM_REPOSITORY}-srpms}"
           upload_packages "./srpm-output" "*.src.rpm" "${TARGET_SRPM_REPOSITORY}" "SRPM"
 
       - name: "Commit: srpm ready"
@@ -180,23 +174,18 @@ jobs:
           rpmbuild -bb ~/rpmbuild/SPECS/qemu-kvm.spec \
             --define "_rpmdir $PWD/rpms"
 
-      - name: Configure pulp-cli
+      - name: Upload RPMs to Pulp
         env:
+          PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
+          TARGET_ARCH: ${{ matrix.arch }}
           PULP_USERNAME: ${{ vars.PULP_USERNAME }}
           PULP_PASSWORD: ${{ secrets.PULP_PASSWORD }}
           PULP_BASE_URL: ${{ vars.PULP_BASE_URL }}
         run: |
           source scripts/pulp-common.sh
-          configure_pulp_cli
-
-      - name: Upload RPMs to Pulp
-        env:
-          PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
-          TARGET_ARCH: ${{ matrix.arch }}
-        run: |
-          source scripts/pulp-common.sh
           : "${PULP_RPM_REPOSITORY:?PULP_RPM_REPOSITORY variable is required}"
-          upload_packages "./rpms" "*.rpm" "${PULP_RPM_REPOSITORY}" "RPM (${TARGET_ARCH})" "${TARGET_ARCH}" "true"
+          TARGET_RPM_REPOSITORY="${PULP_RPM_REPOSITORY}-${TARGET_ARCH}"
+          upload_packages "./rpms" "*.rpm" "${TARGET_RPM_REPOSITORY}" "RPM (${TARGET_ARCH})" "${TARGET_ARCH}" "true"
 
       - name: Upload build logs on failure
         if: failure()
@@ -222,26 +211,26 @@ jobs:
       - name: Install pulp-cli
         run: python3 -m pip install pulp-cli
 
-      - name: Configure pulp-cli
+      - name: Publish repositories
         env:
+          PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
+          PULP_SRPM_REPOSITORY: ${{ vars.PULP_SRPM_REPOSITORY }}
           PULP_USERNAME: ${{ vars.PULP_USERNAME }}
           PULP_PASSWORD: ${{ secrets.PULP_PASSWORD }}
           PULP_BASE_URL: ${{ vars.PULP_BASE_URL }}
         run: |
           source scripts/pulp-common.sh
-          configure_pulp_cli
-
-      - name: Publish repositories
-        env:
-          PULP_RPM_REPOSITORY: ${{ vars.PULP_RPM_REPOSITORY }}
-          PULP_SRPM_REPOSITORY: ${{ vars.PULP_SRPM_REPOSITORY }}
-        run: |
-          source scripts/pulp-common.sh
           : "${PULP_RPM_REPOSITORY:?PULP_RPM_REPOSITORY variable is required}"
-          publish_repository "${PULP_RPM_REPOSITORY}"
+          TARGET_RPM_REPOSITORY_X86_64="${PULP_RPM_REPOSITORY}-x86_64"
+          TARGET_RPM_REPOSITORY_AARCH64="${PULP_RPM_REPOSITORY}-aarch64"
 
-          if [ -n "${PULP_SRPM_REPOSITORY}" ] && [ "${PULP_SRPM_REPOSITORY}" != "${PULP_RPM_REPOSITORY}" ]; then
-            publish_repository "${PULP_SRPM_REPOSITORY}"
+          publish_repository "${TARGET_RPM_REPOSITORY_X86_64}"
+          publish_repository "${TARGET_RPM_REPOSITORY_AARCH64}"
+
+          TARGET_SRPM_REPOSITORY="${PULP_SRPM_REPOSITORY:-${PULP_RPM_REPOSITORY}-SRPMS}"
+          if [ "${TARGET_SRPM_REPOSITORY}" != "${TARGET_RPM_REPOSITORY_X86_64}" ] \
+            && [ "${TARGET_SRPM_REPOSITORY}" != "${TARGET_RPM_REPOSITORY_AARCH64}" ]; then
+            publish_repository "${TARGET_SRPM_REPOSITORY}"
           fi
 
       - name: "Commit: rpms ready"
