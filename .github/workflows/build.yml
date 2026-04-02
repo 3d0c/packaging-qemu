@@ -109,7 +109,7 @@ jobs:
           # This keeps publication atomic after both architecture builds complete.
           source scripts/pulp-common.sh
           : "${PULP_RPM_REPOSITORY:?PULP_RPM_REPOSITORY variable is required}"
-          TARGET_SRPM_REPOSITORY="${PULP_SRPM_REPOSITORY:-${PULP_RPM_REPOSITORY}-SRPMS}"
+          TARGET_SRPM_REPOSITORY="${PULP_SRPM_REPOSITORY:-${PULP_RPM_REPOSITORY}-srpms}"
           upload_packages "./srpm-output" "*.src.rpm" "${TARGET_SRPM_REPOSITORY}" "SRPM"
 
       - name: "Commit: srpm ready"

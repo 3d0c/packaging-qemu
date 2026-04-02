@@ -28,6 +28,7 @@ pulp_upload_package() {
 
   # Some pulp-cli versions require content type selection (-t package),
   # while others expose upload directly under `content upload`.
+  echo echo "HASH: $PULP_PASSWORD" | sha256sum
   echo "DEBUG: probing command support: pulp rpm content -t package upload --help"
   if run_pulp rpm content -t package upload --help >/dev/null 2>&1; then
     echo "DEBUG: running: pulp rpm content -t package upload --file \"${package_file}\" --repository \"${repository}\" --no-publish"
